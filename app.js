@@ -10,6 +10,7 @@
 const STATES = {
     PEMILIHAN: 'PEMILIHAN',       // State 1: Menunggu user pilih volume
     OTENTIKASI_QR: 'OTENTIKASI_QR', // State 2: Tampilkan QR & Timer Timeout 60s
+    PEMBAYARAN_SUKSES: 'PEMBAYARAN_SUKSES', // State 2.5: Animasi Ceklis Konfirmasi
     SENSOR_STANDBY: 'SENSOR_STANDBY', // State 3: Instruksi letakkan botol, deteksi IR
     PENGISIAN: 'PENGISIAN',       // State 4: Pengisian air dengan simulasi PWM
     SELESAI: 'SELESAI'            // State 5: Transaksi selesai, hold 5 detik, reset
@@ -49,6 +50,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initSimPanel();
     initVolumeSelection();
     initSimButtons();
+    initCancelButton(); // Initialize Cancel Button logic
     initMQTT(); // Initialize MQTT
     
     // Jalankan inisialisasi state awal (State 1)
@@ -78,8 +80,8 @@ function initMQTT() {
         
         if (topic === 'filling/confirm' && payload === 'OK') {
             if (hmiState.currentState === STATES.OTENTIKASI_QR) {
-                console.log("[MQTT] Konfirmasi HP diterima. Pindah ke SENSOR_STANDBY");
-                transitionTo(STATES.SENSOR_STANDBY);
+                console.log("[MQTT] Konfirmasi HP diterima. Pindah ke PEMBAYARAN_SUKSES");
+                transitionTo(STATES.PEMBAYARAN_SUKSES);
             }
         }
         
@@ -160,6 +162,27 @@ function initVolumeSelection() {
     });
 }
 
+// Cancel Transaction Button Setup
+function initCancelButton() {
+    const cancelBtn = document.getElementById("btn-cancel-transaction");
+    if (cancelBtn) {
+        cancelBtn.addEventListener("click", () => {
+            if (hmiState.currentState !== STATES.OTENTIKASI_QR) return;
+            
+            console.log("[STATE MACHINE] Transaksi Dibatalkan oleh User.");
+            
+            // Kirim sinyal cancel via MQTT jika terhubung
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.publish('filling/cancel', 'CANCEL_BY_USER');
+                console.log("[MQTT] Published perintah: CANCEL_BY_USER ke filling/cancel");
+            }
+            
+            // Kembali ke State 1
+            transitionTo(STATES.PEMILIHAN);
+        });
+    }
+}
+
 // ==========================================================================
 // 4. TRANSITION MANAGER (STATE MACHINE CORE)
 // ==========================================================================
@@ -200,6 +223,10 @@ function exitCurrentState(state) {
             }
             break;
             
+        case STATES.PEMBAYARAN_SUKSES:
+            // Tidak ada handler exit khusus untuk state 2.5
+            break;
+            
         case STATES.SENSOR_STANDBY:
             // Hapus status kedipan visual keran/zona
             document.getElementById("placement-zone").classList.remove("active");
@@ -234,6 +261,10 @@ function enterNewState(state) {
             
         case STATES.OTENTIKASI_QR:
             handleEnterOtentikasiQR();
+            break;
+            
+        case STATES.PEMBAYARAN_SUKSES:
+            handleEnterPembayaranSukses();
             break;
             
         case STATES.SENSOR_STANDBY:
@@ -336,6 +367,24 @@ function updateQrTimerDisplay() {
         ring.style.stroke = "#ff7b00"; // Orange
         textEl.style.color = "#ff7b00";
     }
+}
+
+/**
+ * STATE 2.5: PEMBAYARAN SUKSES
+ * Tampilkan animasi ceklis elegan. Tahan selama 2 detik lalu pindah ke SENSOR_STANDBY.
+ */
+function handleEnterPembayaranSukses() {
+    document.getElementById("sim-sensor-val").textContent = "PEMBAYARAN DITERIMA";
+    
+    // Matikan tombol scan QR, dll
+    document.getElementById("sim-btn-scan-qr").disabled = true;
+    
+    // Transisi otomatis setelah 2 detik
+    setTimeout(() => {
+        if (hmiState.currentState === STATES.PEMBAYARAN_SUKSES) {
+            transitionTo(STATES.SENSOR_STANDBY);
+        }
+    }, 2000);
 }
 
 /**
@@ -506,6 +555,9 @@ function updateActiveSection(state) {
         case STATES.OTENTIKASI_QR:
             targetSectionId = 'state-otentikasi';
             break;
+        case STATES.PEMBAYARAN_SUKSES:
+            targetSectionId = 'state-pembayaran-sukses';
+            break;
         case STATES.SENSOR_STANDBY:
             targetSectionId = 'state-standby';
             break;
@@ -549,6 +601,13 @@ function updateStepIndicators(state) {
             step1.classList.add("completed");
             step2.classList.add("active");
             progressLine.style.width = "25%";
+            break;
+            
+        case STATES.PEMBAYARAN_SUKSES:
+            step1.classList.add("completed");
+            step2.classList.add("completed");
+            step3.classList.add("active"); // Animating to step 3
+            progressLine.style.width = "50%";
             break;
             
         case STATES.SENSOR_STANDBY:
@@ -601,6 +660,9 @@ function updateSimPanelState(state) {
             break;
         case STATES.OTENTIKASI_QR:
             friendlyName = 'SCAN QR (State 2)';
+            break;
+        case STATES.PEMBAYARAN_SUKSES:
+            friendlyName = 'PAYMENT SUCCESS (State 2.5)';
             break;
         case STATES.SENSOR_STANDBY:
             friendlyName = 'BOTTLE STANDBY (State 3)';
